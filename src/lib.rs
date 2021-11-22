@@ -1,4 +1,4 @@
-use std::{collections::HashMap, hash::Hash, iter::{repeat, successors}, ops::{Add, Range}, panic};
+use std::{collections::HashMap, hash::Hash, iter::{repeat, successors}, ops::{Add, Range, Sub}, panic, process::Output};
 
 use tree::Tree;
 mod tree;
@@ -6,32 +6,70 @@ mod tree;
 #[test]
 fn it_works() {
     run(|rnd| {
-        testee(rnd);
+        for _ in 0..10 {
+            rnd.gen_range(0..3);
+        }
     },1);
 }
 
-fn testee<R: Randaman<i32>>(randman: &mut R){
-    for _ in 1..1000 {
-        randman.gen_range(1..10);
-    }
+#[test]
+fn it_works_large() {
+    run(|rnd| {
+        for _ in 0..100 {
+            rnd.gen_range(0..10);
+        }
+    },1);
+}
+
+#[test]
+fn is_closed() {
+    let mut tree : RandmanTree<usize> = Tree::Leaf(EmptyOrClose::Close);
+    assert!(RandmanAll::is_close(&mut tree));
+    let mut tree : RandmanTree<usize> = Tree::Node([
+        (0,Tree::Leaf(EmptyOrClose::Close)),
+        (1,Tree::Leaf(EmptyOrClose::Close)),
+        (2,Tree::Leaf(EmptyOrClose::Close)),
+    ].into());
+    assert!(RandmanAll::is_close(&mut tree));
+    assert_eq!(tree,Tree::Leaf(EmptyOrClose::Close));
 }
 
 #[test]
 fn gen_range() {
     let mut rand = RandmanAll::new(1);
-    let res = (rand.gen_range(1..2),rand.gen_range(1..2));
+    let res = (rand.gen_range(0..2),rand.gen_range(0..2));
+    assert_eq!(res,(0,0));
+    rand.init();
+    assert_eq!(rand.tree,
+        Tree::Node([
+            (0,Tree::Node(
+                [
+                    (0,Tree::Leaf(EmptyOrClose::Close)),
+                    (1,Tree::Leaf(EmptyOrClose::Empty)),
+                ].into()
+            )),
+            (1,Tree::Leaf(EmptyOrClose::Empty))
+        ].into()
+    ));
+    let res = (rand.gen_range(0..2),rand.gen_range(0..2));
+    assert_eq!(res,(0,1));
+    rand.init();
+    let res = (rand.gen_range(0..2),rand.gen_range(0..2));
+    assert_eq!(res,(1,0));
+    rand.init();
+    let res = (rand.gen_range(0..2),rand.gen_range(0..2));
     assert_eq!(res,(1,1));
     rand.init();
-    let res = (rand.gen_range(1..2),rand.gen_range(1..2));
-    assert_eq!(res,(1,2));
-    rand.init();
-    let res = (rand.gen_range(1..2),rand.gen_range(1..2));
-    assert_eq!(res,(2,1));
-    rand.init();
-    let res = (rand.gen_range(1..2),rand.gen_range(1..2));
-    assert_eq!(res,(2,2));
     assert!(RandmanAll::is_close(&mut rand.tree));
 }
+
+#[test]
+fn test_range_to_vec() {
+    let vec = range_to_vec(1..3,1);
+    let exp = (1..3).collect::<Vec<i32>>();
+    assert_eq!(vec,exp)
+}
+
 
 pub fn run<T:Add<Output = T> + Copy + PartialEq + Eq + Hash,F: FnMut(&mut RandmanAll<T>)>(mut test_fn: F,range_step:T) {
     let mut rand = RandmanAll::new(range_step);
@@ -48,13 +86,19 @@ pub trait Randaman<T: Add<Output = T> + Copy + PartialEq + Eq + Hash> {
 
 pub struct RandmanAll<T: Add<Output = T> + Copy + PartialEq + Eq + Hash> {
     step: T,
-    tree:Tree<T,EmptyOrClose>,
+    tree:RandmanTree<T>,
     stack: Vec<T>
+}
+
+type RandmanTree<T> = Tree<T,EmptyOrClose>;
+
+fn range_to_vec<T: Add<Output = T> + Eq + Copy>(range: Range<T>,step: T) -> Vec<T>{
+    successors(Some(range.start), |val| {if *val + step == range.end { None } else { Some(*val + step) }}).collect()
 }
 
 impl <T: Add<Output = T> + Copy + PartialEq + Eq + Hash>Randaman<T> for RandmanAll<T> {
     fn gen_range(&mut self,range: Range<T>) -> T {
-        let range_vec : Vec<_> = successors(Some(range.start), |val| {if *val == range.end { None } else { Some(*val + self.step) }}).collect();
+        let range_vec : Vec<_> = range_to_vec(range,self.step);
         let found = range_vec.iter().find(|idx| {
             let current = self.tree.get_deep_mut(self.stack.iter().map(Clone::clone));
             let map = match current {
@@ -69,10 +113,13 @@ impl <T: Add<Output = T> + Copy + PartialEq + Eq + Hash>Randaman<T> for RandmanA
             match map {
                 Some(map) => {
                     let next = map.get_mut(*idx).expect("初期化時に作られてるはず");
-                    Self::is_close(next)
+                    !Self::is_close(next)
                 },
                 None => {
-                    let hashmap: HashMap<_,_> = range_vec.iter().map(|e| (*e,Tree::Leaf(EmptyOrClose::Empty))).collect();
+                    let hashmap: HashMap<_,_> = range_vec
+                        .iter()
+                        .map(|e| (*e,Tree::Leaf(EmptyOrClose::Empty)))
+                        .collect();
                     current.set(Tree::Node(hashmap));
                     true
                 },
@@ -84,6 +131,7 @@ impl <T: Add<Output = T> + Copy + PartialEq + Eq + Hash>Randaman<T> for RandmanA
     }
 }
 
+#[derive(Debug,PartialEq, Eq)]
 enum EmptyOrClose {
     Empty,Close
 }
@@ -100,16 +148,16 @@ impl <T: Add<Output = T> + Copy + PartialEq + Eq + Hash>RandmanAll<T> {
         last.set(Tree::Leaf(EmptyOrClose::Close));
         self.stack = Vec::new();
     }
-    fn is_close(tree: &mut Tree<T,EmptyOrClose>) -> bool {
+    fn is_close(tree: &mut RandmanTree<T>) -> bool {
         match tree {
-            Tree::Leaf(EmptyOrClose::Empty) => true,
-            Tree::Leaf(EmptyOrClose::Close) => false,
+            Tree::Leaf(EmptyOrClose::Empty) => false,
+            Tree::Leaf(EmptyOrClose::Close) => true,
             Tree::Node(map) => {
-                let closed = map.iter().all(|(_,tree)| matches!(tree,Tree::Leaf(EmptyOrClose::Close)));
+                let closed = map.iter_mut().all(|(_,tree)| Self::is_close(tree));
                 if closed {
                     tree.set(Tree::Leaf(EmptyOrClose::Close));
                 }
-                !closed
+                closed
             },
         }
     }
